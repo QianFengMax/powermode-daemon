@@ -23,6 +23,7 @@ mod scene;
 mod touch;
 mod tasks;
 mod config;
+mod uperf;
 
 use std::fs;
 use std::io::Write;
@@ -276,6 +277,10 @@ fn main() {
     let mut last_rule_check = std::time::Instant::now();
     let mut rule_override: Option<String> = None;
 
+    // uperf 联动：它运行时我们不写 sysfs，把档位同步给它
+    let mut uperf_state = uperf::UperfState::Unknown;
+    let mut last_uperf_check = std::time::Instant::now();
+
     // 负载采样状态
     let mut prev_sample = proc::CpuSample::read();
     let mut thermal_state = thermal::ThermalState::Normal;
@@ -433,14 +438,45 @@ fn main() {
         // 温控封顶
         let capped = cap_by_thermal(&effective, thermal_state.mode_cap());
 
-        // 只在真正变化时写 sysfs。每秒无脑写会造成：
-        // 1) 日志刷屏 2) 频繁 sysfs 写入干扰内核调频器
+        // 每 10 秒检测一次 uperf 是否在运行。
+        // 两个调频器同时写 sysfs 会互相覆盖（实测 uperf 会把我们的
+        // scaling_max_freq 改回去），所以必须互斥。
+        if last_uperf_check.elapsed().as_secs() >= 10 {
+            last_uperf_check = std::time::Instant::now();
+            let now = uperf::detect();
+            if now != uperf_state {
+                match now {
+                    uperf::UperfState::Running =>
+                        println!("[daemon] 检测到 uperf 运行，改由它调频"),
+                    uperf::UperfState::Absent if uperf_state == uperf::UperfState::Running =>
+                        println!("[daemon] uperf 已退出，恢复自调频"),
+                    _ => {}
+                }
+                uperf_state = now;
+                applied.clear(); // 强制重新应用，避免状态错位
+            }
+        }
+
+        // 只在真正变化时动作
         if capped != applied {
             if capped != user_mode {
                 println!("[daemon] 自动调度: {} -> {}（负载 {:?}）",
                     applied, capped, load);
             }
-            apply_mode_with(&capped, &cfg.power_models);
+
+            match uperf_state {
+                uperf::UperfState::Running => {
+                    // uperf 在调频，我们只把档位递过去
+                    match uperf::set_mode(&capped) {
+                        Ok(()) => println!("[daemon] 档位已同步给 uperf: {capped}"),
+                        Err(e) => println!("[daemon] 同步 uperf 失败: {e}"),
+                    }
+                }
+                _ => {
+                    // 自己调频
+                    apply_mode_with(&capped, &cfg.power_models);
+                }
+            }
             applied = capped;
         }
     }
