@@ -1,0 +1,21 @@
+[package]
+name = "powermode-daemon"
+version = "0.2.0"
+edition = "2021"
+description = "Performance scheduler daemon for the GNOME Power Mode extension"
+
+[[bin]]
+name = "powermode-daemon"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+inotify = "0.10"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
