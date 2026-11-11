@@ -1,0 +1,33 @@
+[Unit]
+Description=Power Mode Daemon (GNOME Power Mode extension backend)
+Documentation=https://github.com/QianFengMax/gnome-powermode
+# 状态文件由扩展写入，等它可用即可。不用 graphical-session.target，
+# 那是用户级单元，系统级服务引用它会报 "non-existent unit"。
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/powermode-daemon
+
+# 改 CPU 频率需要 CAP_DAC_OVERRIDE（绕 sysfs 权限）
+# 调度他人线程需要 CAP_SYS_NICE
+CapabilityBoundingSet=CAP_SYS_NICE CAP_SYS_RESOURCE CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_SYS_NICE CAP_SYS_RESOURCE CAP_DAC_OVERRIDE
+
+# 关键：不能用 always。守护进程在「扩展未启用」时会主动以 0 退出，
+# Restart=always 会让它被反复拉起，形成每秒重启一次的循环。
+Restart=on-failure
+RestartSec=5
+
+# 不用 RuntimeDirectory：服务停止时 systemd 会删掉它，
+# 而状态文件（enabled/mode/snapshot）必须跨重启保留。
+# 目录由守护进程自己创建。
+
+# 只允许写这几处
+ProtectSystem=strict
+ReadWritePaths=/sys/devices/system/cpu /run/powermode
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
